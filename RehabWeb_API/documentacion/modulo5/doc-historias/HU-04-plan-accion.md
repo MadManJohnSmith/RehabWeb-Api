@@ -22,8 +22,8 @@ Comparar **desempeño real** frente a **meta inicial** para ajustar planes: vist
 
 ## 3. Estado actual
 
-- **Frontend:** `ComparisonPerformancePageComponent`, ruta `comparativa`, mocks compartidos con ficha paciente.
-- **Backend:** Endpoints y modelo de métricas por implementar; permisos “solo mis pacientes”.
+- **Frontend:** `ComparisonPerformancePageComponent`, ruta `comparativa`, mocks compartidos con ficha paciente. Pendiente: servicios HTTP contra los endpoints descritos en §8.
+- **Backend:** implementados GET individual y POST compare; `MetricPoint` ya existente. Migraciones: a cargo del equipo si cambian índices.
 
 ---
 
@@ -94,4 +94,75 @@ Comparar **desempeño real** frente a **meta inicial** para ajustar planes: vist
 
 ---
 
-*Última revisión del plan: 2026-04-23.*
+## 8. Implementación backend entregada (resumen)
+
+### 8.1 Fórmula y datos
+
+| Tema | Decisión |
+|------|----------|
+| Serie | `MetricPoint` con `metric_type = temporal`, orden `sort_order`, `period_label`. |
+| Fórmula progreso | Placeholder **`hu04-placeholder-v1`**: \\(R_{\\%} = 100 \\cdot \\frac{O_n-O_0}{M_n-O_0}\\) (detalle en **§9**). Sustituir cuando exista la figura oficial en la HU. |
+| IDs en compare | PK **entera** de `Patient` (no UUID en el modelo actual). |
+| Límite grupal | `MAX_COMPARE_PATIENTS = 12` (ajustable en código). |
+
+### 8.2 Archivos nuevos o actualizados
+
+| Archivo | Rol |
+|---------|-----|
+| `RehabWeb_API/services/performance_series.py` | Consulta puntos, tendencias, resumen, `groupBounds`, `resolve_patient_for_therapist`. |
+| `RehabWeb_API/views/performance.py` | `PatientPerformanceSeriesAPIView`, `PerformanceCompareAPIView`. |
+| `RehabWeb_API/serializers.py` | `PerformanceCompareRequestSerializer`. |
+| `RehabWeb_API/api_urls.py` | Rutas `patients/<id>/performance-series/` y `performance/compare/`. |
+| `RehabWeb_API/views/__init__.py` | Export de vistas HU-04. |
+| `RehabWeb_API/tests/test_performance_formula.py` | Tests de fórmula y resumen. |
+| `RehabWeb_API/tests/test_performance_serializers.py` | Validación de lista de IDs. |
+| `RehabWeb_API/tests/test_performance_api.py` | 401, 404, 200 con mocks. |
+| `README.md` | Sección HU-04 (si añadida en el mismo cambio). |
+
+### 8.3 Qué deben hacer los compañeros
+
+1. Datos: `MetricPoint` temporales por paciente para pruebas reales.
+2. Probar GET y POST con token; verificar 403 con paciente ajeno.
+3. Sustituir **placeholder** de fórmula cuando la imagen `image-20260311-233530.png` esté acordada y documentar versión nueva en `summary.formulaVersion`.
+4. Integrar Angular: individual → GET; grupal → POST con `patientIds`.
+5. `python manage.py test RehabWeb_API.tests` en local.
+
+### 8.4 Fases del plan — estado
+
+- Fase 0: fórmula placeholder en **§9**.
+- Fases 2–3: endpoints listos.
+- Fase 4: tests unitarios y API básicos añadidos.
+- Fase 5–6: front y figura oficial pendientes del equipo.
+
+---
+
+## 9. Apéndice técnico — comparativa de desempeño
+
+### Datos de origen
+
+- `MetricPoint` con `metric_type = temporal`; orden `sort_order`, `period_label`.
+- Tope: `SERIES_ROW_CAP` en `services/performance_series.py`.
+
+### `GET /api/v1/patients/<patient_id>/performance-series/`
+
+Token DRF; paciente con vínculo activo. **404** si no existe; **403** si no vinculado.
+
+Respuesta (200), camelCase: `patientId`, `fullName`, `temporalSeries[]` (`sortOrder`, `periodLabel`, `metaValue`, `observedValue`, `trend`), `summary` con `formulaVersion`, `recoveryScorePercent`, etc.
+
+`temporalSeries[].trend`: `initial` | `improved` | `regressed` | `unchanged`.
+
+### `POST /api/v1/performance/compare/`
+
+Cuerpo: `{ "patientIds": [1, 2, 3] }` (enteros, sin duplicados, máx. `MAX_COMPARE_PATIENTS`, 12 por defecto). Respuesta: `patients[]`, `groupBounds` (escala común en vista grupal).
+
+### Fórmula `recoveryScorePercent` (placeholder `hu04-placeholder-v1`)
+
+\\[ R_{\\%} = 100 \\cdot \\frac{O_n - O_0}{M_n - O_0} \\]
+
+- \\(O_0\\): observado del primer punto; \\(O_n\\): último; \\(M_n\\): meta del último periodo. Si \\(M_n - O_0 = 0\\) → `null`.
+
+*Código: `RehabWeb_API/services/performance_series.py`, `RehabWeb_API/views/performance.py`.*
+
+---
+
+*Última revisión del plan: 2026-04-23 (secciones 8–9).*

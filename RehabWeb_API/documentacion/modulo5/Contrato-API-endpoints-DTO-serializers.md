@@ -10,11 +10,11 @@ Documento **canónico de alineación** entre el frontend (Angular) y el backend 
 
 | Tema | Decisión recomendada | Nota |
 |------|----------------------|------|
-| Prefijo API | `/api/v1/` | Todas las rutas de producto bajo este prefijo (salvo `GET /health/` si se expone en raíz). |
+| Prefijo API | `/api/v1/` | Incluye `GET /api/v1/health/` (sin auth). |
 | JSON | **camelCase** en cuerpos y respuestas | Alinear con DTOs TypeScript; en Django usar `djangorestframework-camel-case` o campos explícitos con `source=`. |
-| Autenticación | **DRF Token** (`Authorization: Token <clave>`) | La HU-02 menciona JWT y el front demo muestra `Bearer`; unificar con el stack real o migrar a JWT de forma explícita y documentada. |
+| Autenticación | **DRF Token** (`Authorization: Token <clave>`) | **Decisión HU-07:** stack canónico = Token DRF + `POST /api/v1/auth/login/` y `POST /api/v1/auth/logout/`; no `Bearer` salvo migración explícita a JWT documentada en este archivo. |
 | Errores | Formato estándar DRF | `{"detail": "..."}` o errores por campo; documentar códigos HTTP que el Angular ya trata (400, 401, 403, 404, 500). |
-| Paginación | `PageNumberPagination` global o por vista | Respuesta con `count`, `next`, `previous`, `results` (o el esquema que se fije y se replique en **todos** los listados). |
+| Paginación | `APIPageNumberPagination` (global DRF) | `page` + `page_size` (máx. 50); respuesta `count`, `next`, `previous`, `results` en listados paginados. Objetos compuestos (dashboard, alertas) sin ese envoltorio. |
 | Fechas | ISO 8601 en UTC o `America/Mexico_City` | Una sola política; indicar en cada serializer si es `...Z` o offset. |
 
 ---
@@ -37,8 +37,9 @@ Documento **canónico de alineación** entre el frontend (Angular) y el backend 
 | HU-06 | `POST /api/v1/therapist-patients/{id}/unlink/` | Menú desvincular | Acción soft delete · set `deletedAt` | — | 204 o 200 con estado actualizado. |
 | HU-06 | `POST /api/v1/therapist-patients/{id}/restore/` | Reactivar en UI | Limpia `deletedAt` si aplica | — | Fila vuelve a activa. |
 | HU-06 | `GET /api/v1/patients/{id}/` | `patient-detail-page` · fusión mock + registro | `PatientDetailAPIView` · serializer detalle + métricas si aplica | — | Ficha coherente con lista y comparativa. |
-| HU-07 | `GET /api/v1/health/` | *(opcional en Angular)* ping de arranque | Vista mínima + `SELECT 1` | — | `{ "status": "ok" }` y 200. |
-| Auth | `POST /api/v1/auth/login/` *(si se expone)* | Flujo real de login Angular | `obtain_auth_token` de DRF o vista custom | `username`, `password` | `{ "token": "..." }` — alinear nombre de campo con el front. |
+| HU-07 | `GET /api/v1/health/` | *(opcional en Angular)* ping de arranque | `HealthAPIView` + `SELECT 1` | — | `{ "status": "ok" }` y 200; `503` si la BD no responde. |
+| Auth | `POST /api/v1/auth/login/` | Login Angular / interceptor | `obtain_auth_token` (DRF) | `username`, `password` | `{ "token": "..." }`. |
+| Auth | `POST /api/v1/auth/logout/` | Cierre de sesión (invalidar token) | `LogoutAPIView` | — | `204` sin cuerpo. |
 
 ---
 
@@ -66,9 +67,9 @@ Documento **canónico de alineación** entre el frontend (Angular) y el backend 
 | `PerformanceCompareResponseSerializer` | Varios pacientes | `POST /api/v1/performance/compare/` |
 | `SessionListSerializer` | `Session` (campos reducidos) | Lista paginada |
 | `SessionDetailSerializer` | `Session` + `SessionExercise` nested | Detalle |
-| `TherapistPatientListSerializer` | `TherapistPatient` + `Patient` | Lista pacientes del terapeuta |
-| `TherapistPatientUpdateSerializer` | `TherapistPatient` | PATCH diagnóstico / estado |
-| `LinkPatientSerializer` | Crea `Patient` + `TherapistPatient` | `POST .../link/` |
+| `TherapistPatientRowSerializer` | `TherapistPatient` + `Patient` + `last_session_at` | Lista, ficha, respuestas de link / patch / unlink / restore |
+| `TherapistPatientPatchSerializer` | Validación parcial | `PATCH .../therapist-patients/{id}/` |
+| `PatientLinkRequestSerializer` | Crea o reutiliza `Patient` + `TherapistPatient` | `POST .../patients/link/` |
 
 *(Los nombres exactos pueden variar; lo crítico es que **cada fila de la tabla maestra** siga teniendo un serializer y una vista asignados.)*
 
@@ -90,5 +91,7 @@ Documento **canónico de alineación** entre el frontend (Angular) y el backend 
 | Fecha | Cambio |
 |-------|--------|
 | 2026-04-23 | Creación inicial del documento a partir del plan backend y del reporte frontend. |
+| 2026-04-23 | HU-06: nombres de serializers alineados (`TherapistPatientRowSerializer`, `PatientLinkRequestSerializer`, `TherapistPatientPatchSerializer`). |
+| 2026-04-23 | HU-07: auth login/logout, health bajo `/api/v1/`, paginación global `APIPageNumberPagination`, decisión Token DRF explícita. |
 
 *Mantener este archivo actualizado cuando cambie cualquier ruta, nombre de campo JSON o estrategia de autenticación.*

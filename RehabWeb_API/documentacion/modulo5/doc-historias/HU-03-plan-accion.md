@@ -22,8 +22,8 @@ Detectar pacientes con **más de 3 días** sin sesión registrada, actualizado *
 
 ## 3. Estado actual
 
-- **Frontend:** `InactivityAlertsDataService`, `INACTIVITY_ALERTS_MOCK`, enlaces a `['/app/pacientes', id]`; dashboard integrado con mock de métricas.
-- **Backend:** Sin comando programado ni endpoint; requiere `Session` y `TherapistPatient` con fechas fiables.
+- **Frontend:** `InactivityAlertsDataService`, `INACTIVITY_ALERTS_MOCK`, enlaces a `['/app/pacientes', id]`; dashboard integrado con mock de métricas. Pendiente: consumir `GET /api/v1/inactivity-alerts/` (y/o el bloque del dashboard ya alineado con backend).
+- **Backend:** comando `refresh_inactivity_alerts`, modelo `InactivityAlert`, API listado y reglas compartidas con HU-01 (ver sección 8). Migraciones: a cargo del equipo.
 
 ---
 
@@ -99,4 +99,91 @@ Detectar pacientes con **más de 3 días** sin sesión registrada, actualizado *
 
 ---
 
-*Última revisión del plan: 2026-04-23.*
+## 8. Implementación backend entregada (resumen)
+
+### 8.1 Regla y arquitectura
+
+| Tema | Decisión |
+|------|----------|
+| Última sesión | `Session.occurred_at` máx. por **(terapeuta, paciente)**. |
+| Umbral | `timedelta(days=3)` — más de 72 h sin sesión ⇒ inactivo. |
+| Sin sesiones | Cuenta como inactivo (`severity` `no_sessions` en tabla). |
+| API vs tabla | **GET** devuelve lista **en vivo** (`get_inactive_patients_for_therapist`); el **comando** actualiza **`InactivityAlert`** para AC-01 y auditoría. |
+| Dashboard HU-01 | Usa la misma función para `inactivitySummary.patients`. |
+
+### 8.2 Archivos nuevos o actualizados
+
+| Archivo | Rol |
+|---------|-----|
+| `RehabWeb_API/models.py` | Modelo `InactivityAlert`. |
+| `RehabWeb_API/services/inactivity_rules.py` | `INACTIVITY_THRESHOLD`, `get_inactive_patients_for_therapist`, `last_session_times_by_patient`. |
+| `RehabWeb_API/services/inactivity_sync.py` | `sync_inactivity_alerts_for_therapist`, `sync_all_inactivity_alerts`. |
+| `RehabWeb_API/services/dashboard_metrics.py` | Delega inactividad en `inactivity_rules` (sin duplicar lógica). |
+| `RehabWeb_API/views/inactivity.py` | `InactivityAlertListAPIView` → `GET /api/v1/inactivity-alerts/`. |
+| `RehabWeb_API/api_urls.py` | Ruta `inactivity-alerts/`. |
+| `RehabWeb_API/management/commands/refresh_inactivity_alerts.py` | Job batch documentado para cron. |
+| `RehabWeb_API/admin.py` | Registro de `InactivityAlert`. |
+| `RehabWeb_API/views/__init__.py` | Export de la nueva vista. |
+| `RehabWeb_API/tests/test_inactivity_rules.py` | Umbral temporal. |
+| `RehabWeb_API/tests/test_inactivity_api.py` | 401 / 403 / 200 con mocks. |
+| `RehabWeb_API/tests/test_refresh_inactivity_command.py` | Smoke del comando. |
+| `README.md` | Sección HU-03 (si se añadió en el mismo PR). |
+
+### 8.3 Qué deben hacer los compañeros
+
+1. `makemigrations` / `migrate` para `InactivityAlert`.
+2. Datos: `Therapist`, vínculos activos, `Session` con fechas coherentes.
+3. Probar `GET /api/v1/inactivity-alerts/` con token; opcional `?patientId=`.
+4. Ejecutar `python manage.py refresh_inactivity_alerts` y revisar filas en admin.
+5. Programar cron o tarea programada en el entorno del curso.
+6. Integrar el front sustituyendo mocks por `HttpClient`.
+7. `python manage.py test RehabWeb_API.tests` en local.
+
+### 8.4 Fases del plan — estado
+
+- **Fase 0:** reglas y contrato HTTP en **§9** de este plan.
+- **Fase 1:** Opción A (`InactivityAlert`) implementada; API en vivo no exige filas previas.
+- **Fase 2–4:** comando + README/cron en doc y README raíz.
+- **Fase 5:** tests añadidos (integración ORM ampliable cuando existan migraciones).
+- **PATCH “visto”:** no implementado (front no lo pedía).
+
+---
+
+## 9. Apéndice técnico — alertas de inactividad
+
+### Regla de negocio (código)
+
+- Archivo: `RehabWeb_API/services/inactivity_rules.py`.
+- **Última sesión:** máximo `Session.occurred_at` por par **(terapeuta, paciente)**.
+- **Inactivo:** no hay sesiones **o** `(ahora - última sesión) > timedelta(days=3)`.
+- Sin sesiones nunca registradas: se considera **inactivo** (`daysSinceLastSession` puede ser `null` en JSON).
+
+El **dashboard** (HU-01) usa la misma función `get_inactive_patients_for_therapist` para `inactivitySummary`.
+
+### `GET /api/v1/inactivity-alerts/`
+
+- Autenticación: token DRF; requiere fila `Therapist`. Respuesta **en vivo**.
+
+| Parámetro (query) | Descripción |
+|-------------------|-------------|
+| `patientId` | Filtra a ese ID (entero). |
+
+Ejemplo de cuerpo (200): `thresholdDays`, `inactiveCount`, `alerts[]` con `patientId`, `fullName`, `daysSinceLastSession`, `lastSessionAt`. Códigos: 401, 403, 400 si `patientId` no entero.
+
+### Comando `refresh_inactivity_alerts`
+
+Materializa `InactivityAlert` para el job diario:
+
+```bash
+python manage.py refresh_inactivity_alerts
+```
+
+Cron (Linux) ejemplo: `0 6 * * * cd /ruta/RehabWeb-Api && .venv/bin/python manage.py refresh_inactivity_alerts`. Windows: Programador de tareas con el `python` del venv.
+
+### Modelo `InactivityAlert`
+
+Campos principales: `therapist`, `patient`, `days_since_last_session`, `last_session_at`, `severity` (`low` / `medium` / `high` / `no_sessions`), `updated_at`.
+
+---
+
+*Última revisión del plan: 2026-04-23 (secciones 8–9).*

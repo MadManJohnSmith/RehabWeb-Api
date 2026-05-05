@@ -4,18 +4,38 @@ Django settings for RehabWeb_API project.
 Generated for the RehabWeb physiotherapy webapp.
 """
 
+import os
+import sys
 from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover
+    load_dotenv = None
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+if load_dotenv:
+    load_dotenv(BASE_DIR / '.env')
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-change-this-in-production-rehabweb-api-secret-key'
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-change-this-in-production-rehabweb-api-secret-key',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('1', 'true', 'yes')
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.environ.get(
+        'DJANGO_ALLOWED_HOSTS',
+        'localhost,127.0.0.1',
+    ).split(',')
+    if h.strip()
+]
 
 
 # Application definition
@@ -72,13 +92,35 @@ WSGI_APPLICATION = 'RehabWeb_API.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'rehab_db',
-        'USER': 'root',
-        'PASSWORD': '',
-        'HOST': '127.0.0.1',
-        'PORT': '3306',
+        'NAME': os.environ.get('MYSQL_DATABASE', 'rehab_db'),
+        'USER': os.environ.get('MYSQL_USER', 'root'),
+        'PASSWORD': os.environ.get('MYSQL_PASSWORD', ''),
+        'HOST': os.environ.get('MYSQL_HOST', '127.0.0.1'),
+        'PORT': os.environ.get('MYSQL_PORT', '3306'),
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+        },
     }
 }
+
+# Permite `python manage.py test` sin MySQL local (SQLite en memoria).
+if sys.argv[1:2] == ['test']:
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': ':memory:',
+    }
+else:
+    try:
+        _conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', '60'))
+    except ValueError:
+        _conn_max_age = 60
+    if DATABASES['default']['ENGINE'] == 'django.db.backends.mysql':
+        DATABASES['default']['CONN_MAX_AGE'] = _conn_max_age
+
+
+# Límites de carga en memoria (export clínico HU-02 genera binarios en servidor).
+DATA_UPLOAD_MAX_MEMORY_SIZE = 26 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 26 * 1024 * 1024
 
 
 # Password validation
@@ -126,6 +168,11 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:4200',
     'http://127.0.0.1:4200',
 ]
+_cors_extra = os.environ.get('DJANGO_CORS_EXTRA_ORIGINS', '')
+if _cors_extra:
+    CORS_ALLOWED_ORIGINS.extend(
+        o.strip() for o in _cors_extra.split(',') if o.strip()
+    )
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -154,6 +201,7 @@ REST_FRAMEWORK = {
     'DEFAULT_FILTER_BACKENDS': (
         'django_filters.rest_framework.DjangoFilterBackend',
     ),
+    'DEFAULT_PAGINATION_CLASS': 'RehabWeb_API.pagination.APIPageNumberPagination',
 }
 
 

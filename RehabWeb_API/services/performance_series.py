@@ -1,0 +1,186 @@
+"""
+Series de desempeño (meta vs observado) para HU-04.
+
+Usa ``MetricPoint`` con ``metric_type=temporal``. La fórmula de *recovery score*
+está documentada como versión **placeholder** hasta disponer de la figura oficial
+en `Historias de Usuario Modulo 5` (`image-20260311-233530.png`).
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Any
+
+from RehabWeb_API.models import MetricPoint, Patient
+from RehabWeb_API.services.therapist_access import get_active_therapist_patient_link
+
+MAX_COMPARE_PATIENTS = 12
+SERIES_ROW_CAP = 250
+FORMULA_VERSION = 'hu04-placeholder-v1'
+
+
+def _decimal_to_float(value: Decimal) -> float:
+    return float(value)
+
+
+def _trend_for_observed(values: list[float]) -> list[str]:
+    out: list[str] = []
+    for i, _ in enumerate(values):
+        if i == 0:
+            out.append('initial')
+            continue
+        prev, curr = values[i - 1], values[i]
+        if curr > prev:
+            out.append('improved')
+        elif curr < prev:
+            out.append('regressed')
+        else:
+            out.append('unchanged')
+    return out
+
+
+def fetch_temporal_metric_points(patient_id: int) -> list[MetricPoint]:
+    return list(
+        MetricPoint.objects.filter(
+            patient_id=patient_id,
+            metric_type=MetricPoint.MetricType.TEMPORAL,
+        )
+        .only(
+            'sort_order',
+            'period_label',
+            'meta_value',
+            'observed_value',
+        )
+        .order_by('sort_order', 'period_label')[:SERIES_ROW_CAP]
+    )
+
+
+def metric_points_to_series_rows(points: list[MetricPoint]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for mp in points:
+        rows.append(
+            {
+                'sortOrder': mp.sort_order,
+                'periodLabel': mp.period_label,
+                'metaValue': _decimal_to_float(mp.meta_value),
+                'observedValue': _decimal_to_float(mp.observed_value),
+            }
+        )
+    obs = [r['observedValue'] for r in rows]
+    trends = _trend_for_observed(obs)
+    for i, r in enumerate(rows):
+        r['trend'] = trends[i] if i < len(trends) else 'initial'
+    return rows
+
+
+def recovery_score_percent(
+    initial_observed: Decimal,
+    final_observed: Decimal,
+    final_meta: Decimal,
+) -> float | None:
+    """
+    Placeholder HU-04: progreso relativo respecto a la meta del último periodo.
+
+    .. math::
+
+        R_{\\%} = 100 \\cdot \\frac{O_n - O_0}{M_n - O_0}
+
+    Donde :math:`O_0` = observado del primer punto, :math:`O_n` = observado del
+    último, :math:`M_n` = meta del último periodo (objetivo actual en la serie).
+
+    Si el denominador es 0 se devuelve ``None`` (indeterminado).
+    """
+    denom = final_meta - initial_observed
+    if denom == 0:
+        return None
+    return float((final_observed - initial_observed) / denom * 100)
+
+
+def compute_series_summary(series: list[dict[str, Any]]) -> dict[str, Any]:
+    """Resumen numérico + score a partir de filas ya serializadas."""
+    if not series:
+        return {
+            'formulaVersion': FORMULA_VERSION,
+            'initialMeta': None,
+            'initialObserved': None,
+            'finalMeta': None,
+            'finalObserved': None,
+            'recoveryScorePercent': None,
+        }
+    first, last = series[0], series[-1]
+    o0 = Decimal(str(first['observedValue']))
+    on = Decimal(str(last['observedValue']))
+    mn = Decimal(str(last['metaValue']))
+    m0 = Decimal(str(first['metaValue']))
+    score = recovery_score_percent(o0, on, mn)
+    return {
+        'formulaVersion': FORMULA_VERSION,
+        'initialMeta': first['metaValue'],
+        'initialObserved': first['observedValue'],
+        'finalMeta': last['metaValue'],
+        'finalObserved': last['observedValue'],
+        'initialPeriodLabel': first.get('periodLabel'),
+        'finalPeriodLabel': last.get('periodLabel'),
+        'recoveryScorePercent': score,
+        'note': (
+            'recoveryScorePercent es placeholder hasta validar con la figura oficial de la HU-04.'
+        ),
+    }
+
+
+def build_patient_performance_payload(
+    *,
+    patient_id: int,
+    full_name: str,
+) -> dict[str, Any]:
+    points = fetch_temporal_metric_points(patient_id)
+    temporal_series = metric_points_to_series_rows(points)
+    summary = compute_series_summary(temporal_series)
+    return {
+        'patientId': patient_id,
+        'fullName': full_name,
+        'temporalSeries': temporal_series,
+        'summary': summary,
+    }
+
+
+def resolve_patient_for_therapist(
+    therapist,
+    patient_id: int,
+) -> tuple[str, dict[str, Any] | None]:
+    """
+    Devuelve ``('not_found'|'forbidden'|'ok', payload|None)``.
+    """
+    if not Patient.objects.filter(pk=patient_id).exists():
+        return 'not_found', None
+    link = get_active_therapist_patient_link(therapist, patient_id)
+    if link is None:
+        return 'forbidden', None
+    payload = build_patient_performance_payload(
+        patient_id=patient_id,
+        full_name=link.patient.full_name,
+    )
+    return 'ok', payload
+
+
+def compute_group_bounds(patients_payload: list[dict[str, Any]]) -> dict[str, float]:
+    """Límites sugeridos para escala común en gráfico grupal."""
+    all_obs: list[float] = []
+    all_meta: list[float] = []
+    for block in patients_payload:
+        for row in block.get('temporalSeries') or []:
+            all_obs.append(row['observedValue'])
+            all_meta.append(row['metaValue'])
+    if not all_obs:
+        return {
+            'minObserved': 0.0,
+            'maxObserved': 1.0,
+            'minMeta': 0.0,
+            'maxMeta': 1.0,
+        }
+    return {
+        'minObserved': min(all_obs),
+        'maxObserved': max(all_obs),
+        'minMeta': min(all_meta),
+        'maxMeta': max(all_meta),
+    }
