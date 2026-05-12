@@ -24,14 +24,14 @@ Documento **canónico de alineación** entre el frontend (Angular) y el backend 
 | HU | Método y ruta (propuesta) | Artefacto Angular (hoy / objetivo) | Capa Django (propuesta) | Cuerpo / query principal | Respuesta esperada (resumen) |
 |----|---------------------------|-------------------------------------|-------------------------|---------------------------|-------------------------------|
 | HU-01 | `GET /api/v1/me/dashboard/` | `DashboardDataService.getDashboardMetrics()` · DTO `DashboardMetricsDto` · mock `DASHBOARD_METRICS_MOCK` | Vista `MeDashboardAPIView` o acción `me/dashboard` · serializer `DashboardMetricsSerializer` (solo lectura, nested) | — | JSON equivalente al DTO: alertas resumidas, indicadores, `romByWeek`, serie temporal (meta vs observado), sesiones recientes, metadatos para tooltips / N vs N−1 si el front no recalcula. |
-| HU-02 | `POST /api/v1/reports/export/` | `ClinicalExportFiltersDto` · `reports-page.component` · `TherapistSessionService` (cabecera auth) | Vista o `ReportViewSet` · `ClinicalExportRequestSerializer` · permiso “paciente vinculado al terapeuta” | `patientId`, `dateFrom`, `dateTo`, `format`: `pdf` \| `xlsx` | Archivo binario (`Content-Type` + `Content-Disposition`) o job asíncrono acordado. |
-| HU-03 | `GET /api/v1/inactivity-alerts/` | `InactivityAlertsDataService.getAlerts()` · `InactivityAlertRowDto` · `INACTIVITY_ALERTS_MOCK` | `InactivityAlertViewSet` (lista) · `InactivityAlertSerializer` · filtros `django-filter` opcionales | `?patientId=`, `?severity=`, paginación | Lista de pacientes inactivos (>3 días desde última sesión), enlazable a `/app/pacientes/:id`. |
+| HU-02 | `POST /api/v1/reports/export/` | `ClinicalExportApiRequestDto` · `ClinicalExportApiService` · `reports-page.component` · interceptor `Authorization: Token …` | `ReportExportAPIView` · `ClinicalExportRequestSerializer` · permiso “paciente vinculado al terapeuta” | `patientId` (**int**), `dateFrom`, `dateTo`, `format`: `pdf` \| `xlsx` | Archivo binario (`Content-Type` + `Content-Disposition`). |
+| HU-03 | `GET /api/v1/inactivity-alerts/` | `InactivityAlertsDataService.getAlertsView()` · mapper · `InactivityAlertsViewDto` · respaldo `INACTIVITY_ALERTS_MOCK_VIEW` | `InactivityAlertListAPIView` · datos en vivo (`get_inactive_patients_for_therapist`) | `?patientId=` (opcional, entero) | `{ thresholdDays, inactiveCount, alerts[] }` con `patientId`, `fullName`, `daysSinceLastSession`, `lastSessionAt`; prioridad UI calculada en front. |
 | HU-03 | *(proceso)* `python manage.py refresh_inactivity_alerts` | Copy UI “Cron / job servidor” | `ManagementCommand` + tarea programada OS | — | Actualiza tabla `InactivityAlert` o materializa criterio; no es HTTP. |
-| HU-04 | `GET /api/v1/patients/{id}/performance-series/` | `ComparisonPerformancePageComponent` · datos desde `patient-detail.mock` / API real | `PatientPerformanceSeriesAPIView` · `PerformanceSeriesSerializer` | — | Series meta vs observado para un paciente (autorizado). |
-| HU-04 | `POST /api/v1/performance/compare/` | Vista grupal en comparativa · varios IDs en body | Vista o acción · `PerformanceCompareRequestSerializer` | `{ "patientIds": ["uuid", ...] }` | Objeto por paciente con mismas series o `recoveryScore` semanal según contrato cerrado. |
-| HU-05 | `GET /api/v1/sessions/` | `SessionHistoryApiService.searchSessions()` · `session-history.dto.ts` · `sessions-list.mock.ts` | `SessionViewSet` (list) · `SessionListSerializer` · `DjangoFilterBackend` + paginación | `?patientId=`, `?search=`, `?page=`, `?page_size=` | Lista ordenada **desc** por fecha; payload liviano para tabla. |
-| HU-05 | `GET /api/v1/sessions/{id}/` | `SessionHistoryApiService.getSessionDetail(id)` · mock `public/mock/session-history.json` | `SessionViewSet` (retrieve) · `SessionDetailSerializer` (notas, ejercicios, adherencia anidados) | — | Detalle para panel lateral sin recargar la página. |
-| HU-06 | `GET /api/v1/patients/` | Lista en `patients-list-page` · filas desde `PatientsRegistryService` | `PatientViewSet` o lista de vínculos · `TherapistPatientListSerializer` | `?q=`, `?clinicalStatus=`, `?includeDeleted=` | Tabla: id, identificador asociación, nombre, diagnóstico, estado, última sesión. |
+| HU-04 | `GET /api/v1/patients/{id}/performance-series/` | *(Opcional)* ficha / gráficos por paciente | `PatientPerformanceSeriesAPIView` | — | Serie temporal meta vs observado (`temporalSeries`, `summary`). |
+| HU-04 | `POST /api/v1/performance/compare/` | `PerformanceCompareApiService` · `ComparisonPerformancePageComponent` · tipos `performance-compare-api.types.ts` | `PerformanceCompareAPIView` · `PerformanceCompareRequestSerializer` | `{ "patientIds": [1, 2, ...] }` (**enteros**, máx. 12) | `{ patients[], groupBounds }` · cada paciente: `patientId`, `fullName`, `temporalSeries`, `summary`. |
+| HU-05 | `GET /api/v1/sessions/` | `SessionHistoryApiService.searchSessions()` · `session-history.dto.ts` | `SessionViewSet` (list) · `SessionListSerializer` · filtros + paginación | `?patientId=`, `?search=`, `?page=`, `?page_size=` | Lista paginada DRF (`count`, `next`, `previous`, `results`). |
+| HU-05 | `GET /api/v1/sessions/{id}/` | `SessionHistoryApiService.getSessionDetail(id)` | `SessionViewSet` (retrieve) · `SessionDetailSerializer` | — | Detalle para panel lateral. |
+| HU-06 | `GET /api/v1/patients/` | `PatientsApiService.list()` · `patients-list-page` | `TherapistPatientListAPIView` · `TherapistPatientRowSerializer` | `?q=`, `?clinicalStatus=`, `?includeDeleted=`, `page`, `page_size` | Tabla con `patientId` numérico, vínculo, diagnóstico, estado, última sesión. |
 | HU-06 | `POST /api/v1/patients/link/` | Modal vincular en `patients-list-page` | Acción custom o vista · `LinkPatientSerializer` | Identificador externo + datos mínimos paciente | Crea `Patient` + `TherapistPatient`. |
 | HU-06 | `PATCH /api/v1/therapist-patients/{id}/` *(o nested)* | Modal editar diagnóstico | Update parcial en vínculo · `TherapistPatientUpdateSerializer` | `primaryDiagnosis`, opcional `clinicalStatus` | Reflejo en lista y ficha. |
 | HU-06 | `POST /api/v1/therapist-patients/{id}/unlink/` | Menú desvincular | Acción soft delete · set `deletedAt` | — | 204 o 200 con estado actualizado. |
@@ -48,11 +48,12 @@ Documento **canónico de alineación** entre el frontend (Angular) y el backend 
 | DTO o tipo (Angular) | Servicio / componente | Endpoint backend al que debe apuntar |
 |----------------------|------------------------|--------------------------------------|
 | `DashboardMetricsDto` | `DashboardDataService` | `GET /api/v1/me/dashboard/` |
-| `ClinicalExportFiltersDto` | `reports-page` + sesión terapeuta | `POST /api/v1/reports/export/` |
-| `InactivityAlertRowDto` | `InactivityAlertsDataService` | `GET /api/v1/inactivity-alerts/` |
-| Datos comparativa / perfil | `ComparisonPerformancePageComponent`, `patient-detail` | `GET .../performance-series/`, `POST .../performance/compare/`, `GET /api/v1/patients/{id}/` |
+| `ClinicalExportApiRequestDto` | `ClinicalExportApiService` · `reports-page` | `POST /api/v1/reports/export/` |
+| `InactivityAlertsViewDto` / `InactivityAlertRowDto` | `InactivityAlertsDataService` + mapper | `GET /api/v1/inactivity-alerts/` |
+| `PerformanceCompareApiResponse` | `PerformanceCompareApiService` · comparativa | `POST /api/v1/performance/compare/` |
 | Tipos en `session-history.dto.ts` | `SessionHistoryApiService` | `GET /api/v1/sessions/`, `GET /api/v1/sessions/{id}/` |
-| Filas de pacientes (lista) | `PatientsRegistryService` → API | `GET /api/v1/patients/` + acciones link / patch / unlink |
+| Filas de pacientes (lista) | `PatientsApiService` | `GET /api/v1/patients/` + link / patch / unlink / restore |
+| `patient-detail-page` | Mock local + API donde aplique | `GET /api/v1/patients/{id}/` (ficha) |
 
 ---
 
@@ -77,12 +78,13 @@ Documento **canónico de alineación** entre el frontend (Angular) y el backend 
 
 ## 5. Checklist al sustituir mocks
 
-- [ ] Sustituir `DASHBOARD_METRICS_MOCK` por `HttpClient` a `GET /api/v1/me/dashboard/` con el mismo shape de `DashboardMetricsDto` (o adaptar el DTO y el componente en un solo PR).
-- [ ] Reportes: dejar de generar CSV en cliente; usar respuesta del `POST` de exportación con token real.
-- [ ] Alertas: sustituir `INACTIVITY_ALERTS_MOCK` por `GET /api/v1/inactivity-alerts/`.
-- [ ] Historial: eliminar delay + JSON estático; usar `sessions` paginado + retrieve.
-- [ ] Pacientes: migrar de `localStorage` a `GET/PATCH/POST` de pacientes y vínculos.
-- [ ] Documentar en README cómo obtener el **token DRF** y la URL base (`environment.ts`).
+- [x] Dashboard: `DashboardDataService` + `mapDashboardApiToDto` → `GET /api/v1/me/dashboard/` (respaldo mock en error).
+- [x] Reportes: `ClinicalExportApiService` + `Blob` / `POST /api/v1/reports/export/` con token DRF.
+- [x] Alertas: `GET /api/v1/inactivity-alerts/` + mapper (respaldo mock en error).
+- [x] Historial: `SessionHistoryApiService` → `GET /api/v1/sessions/` + detalle.
+- [x] Pacientes: `PatientsApiService` → lista/ficha/link/PATCH/unlink/restore.
+- [x] Comparativa: `POST /api/v1/performance/compare/` integrado en Angular.
+- [x] README WebApp: URL base, token DRF, orden de arranque; tests unitarios de mappers y `AuthService` (ver repo `RehabWeb-WebApp`).
 
 ---
 
@@ -93,5 +95,6 @@ Documento **canónico de alineación** entre el frontend (Angular) y el backend 
 | 2026-04-23 | Creación inicial del documento a partir del plan backend y del reporte frontend. |
 | 2026-04-23 | HU-06: nombres de serializers alineados (`TherapistPatientRowSerializer`, `PatientLinkRequestSerializer`, `TherapistPatientPatchSerializer`). |
 | 2026-04-23 | HU-07: auth login/logout, health bajo `/api/v1/`, paginación global `APIPageNumberPagination`, decisión Token DRF explícita. |
+| 2026-05-12 | Alineación RehabWeb-WebApp: tabla maestra §2 y §3 actualizadas (export, alertas, sesiones, pacientes, comparativa); checklist §5 marcado según integración real; `patientIds` en compare como **array de enteros**. |
 
 *Mantener este archivo actualizado cuando cambie cualquier ruta, nombre de campo JSON o estrategia de autenticación.*
