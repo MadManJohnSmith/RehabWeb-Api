@@ -1,7 +1,14 @@
-"""Filtros django-filter para la API."""
+"""Filtros django-filter para la API.
+
+Incluye filtros explícitos por `sessionId` y `patientId`, y un filtro
+`search` que busca en nombre de paciente, `external_id`, programa, fecha
+y notas. Esto permite que la UI use tanto parámetros específicos como la
+barra de búsqueda genérica.
+"""
 
 import django_filters
-from django.db.models import Q
+from django.db.models import CharField, Q
+from django.db.models.functions import Cast, TruncDate
 
 from RehabWeb_API.models import Session, TherapistPatient
 
@@ -9,19 +16,46 @@ from RehabWeb_API.models import Session, TherapistPatient
 class SessionFilter(django_filters.FilterSet):
     """Query params alineados con el front (camelCase)."""
 
+    # filtros explícitos (números)
+    sessionId = django_filters.NumberFilter(field_name='id')
     patientId = django_filters.NumberFilter(field_name='patient_id')
+
+    # búsqueda libre que cubre nombre, external id, programa, fecha y notas
     search = django_filters.CharFilter(method='filter_search')
 
     class Meta:
         model = Session
-        fields = ('patientId',)
+        fields = ('patientId', 'sessionId')
 
     def filter_search(self, queryset, name, value):
         if not value or not value.strip():
             return queryset
         term = value.strip()
-        return queryset.filter(
-            Q(program_label__icontains=term) | Q(notes__icontains=term)
+
+        # coincidencia exacta por id numérico cuando el término es dígito
+        exact_id_match = Q()
+        if term.isdigit():
+            exact_id_match = Q(id=int(term))
+
+        # coincidencia por patient PK cuando el término es dígito
+        patient_id_match = Q()
+        if term.isdigit():
+            patient_id_match = Q(patient_id=int(term))
+
+        # truncamos la fecha a día para permitir búsquedas por fecha YYYY-MM-DD
+        return (
+            queryset.annotate(
+                occurred_date_text=Cast(TruncDate('occurred_at'), CharField()),
+            )
+            .filter(
+                exact_id_match
+                | patient_id_match
+                | Q(patient__full_name__icontains=term)
+                | Q(patient__external_id__icontains=term)
+                | Q(program_label__icontains=term)
+                | Q(occurred_date_text__icontains=term)
+                | Q(notes__icontains=term)
+            )
         )
 
 
