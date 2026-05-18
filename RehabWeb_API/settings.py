@@ -95,9 +95,9 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.environ.get('MYSQL_DATABASE', 'rehab_db'),
         'USER': os.environ.get('MYSQL_USER', 'root'),
-        'PASSWORD': os.environ.get('MYSQL_PASSWORD', ''),
+        'PASSWORD': os.environ.get('MYSQL_PASSWORD', 'Wispy'),
         'HOST': os.environ.get('MYSQL_HOST', '127.0.0.1'),
-        'PORT': os.environ.get('MYSQL_PORT', '3306'),
+        'PORT': os.environ.get('MYSQL_PORT', '3307'),
         'OPTIONS': {
             'charset': 'utf8mb4',
             # MariaDB W002: strict mode escala warnings de integridad
