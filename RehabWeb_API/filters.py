@@ -22,10 +22,13 @@ class SessionFilter(django_filters.FilterSet):
 
     # búsqueda libre que cubre nombre, external id, programa, fecha y notas
     search = django_filters.CharFilter(method='filter_search')
+    status = django_filters.CharFilter(field_name='status', lookup_expr='iexact')
+    date_from = django_filters.DateFilter(field_name='occurred_at', lookup_expr='date__gte')
+    date_to = django_filters.DateFilter(field_name='occurred_at', lookup_expr='date__lte')
 
     class Meta:
         model = Session
-        fields = ('patientId', 'sessionId')
+        fields = ('patientId', 'sessionId', 'status', 'date_from', 'date_to')
 
     def filter_search(self, queryset, name, value):
         if not value or not value.strip():
