@@ -17,3 +17,4 @@ db.sqlite3
 *.sublime-workspace
 .DS_Store
 Thumbs.db
+RehabWeb_API/settings.py
