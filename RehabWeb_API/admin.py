@@ -20,6 +20,7 @@ from RehabWeb_API.models import (
 @admin.register(Therapist)
 class TherapistAdmin(admin.ModelAdmin):
     list_display = ('id', 'user')
+    list_select_related = ('user',)
     search_fields = ('user__username',)
 
 
@@ -33,6 +34,12 @@ class PatientAdmin(admin.ModelAdmin):
 class TherapistPatientAdmin(admin.ModelAdmin):
     list_display = ('id', 'therapist', 'patient', 'clinical_status', 'deleted_at')
     list_filter = ('clinical_status',)
+    list_select_related = ('therapist__user', 'patient')
+    search_fields = (
+        'therapist__user__username',
+        'patient__full_name',
+        'patient__external_id',
+    )
 
 
 @admin.register(InactivityAlert)
@@ -46,6 +53,7 @@ class InactivityAlertAdmin(admin.ModelAdmin):
         'updated_at',
     )
     list_filter = ('severity', 'therapist')
+    list_select_related = ('therapist__user', 'patient')
     date_hierarchy = 'updated_at'
 
 
@@ -58,6 +66,7 @@ class SessionExerciseInline(admin.TabularInline):
 class SessionAdmin(admin.ModelAdmin):
     list_display = ('id', 'therapist', 'patient', 'occurred_at', 'program_label')
     list_filter = ('therapist',)
+    list_select_related = ('therapist__user', 'patient')
     date_hierarchy = 'occurred_at'
     inlines = (SessionExerciseInline,)
 
@@ -66,9 +75,11 @@ class SessionAdmin(admin.ModelAdmin):
 class SessionExerciseAdmin(admin.ModelAdmin):
     list_display = ('id', 'session', 'name', 'sets', 'reps', 'sort_order')
     list_filter = ('session__therapist',)
+    list_select_related = ('session',)
 
 
 @admin.register(MetricPoint)
 class MetricPointAdmin(admin.ModelAdmin):
     list_display = ('id', 'patient', 'metric_type', 'period_label', 'sort_order')
     list_filter = ('metric_type',)
+    list_select_related = ('patient',)

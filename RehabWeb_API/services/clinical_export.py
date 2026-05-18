@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 from decimal import Decimal
 from io import BytesIO
 from typing import TYPE_CHECKING
+from xml.sax.saxutils import escape as xml_escape
 
 from django.utils import timezone
 
@@ -28,13 +30,54 @@ logger = logging.getLogger(__name__)
 # Anti-abuso: rango máximo de fechas por exportación (AC-02 / plan HU-02).
 MAX_EXPORT_RANGE_DAYS = 366
 
+# Cap defensivo contra OOM cuando un paciente tiene historial extremadamente
+# largo. Si el corte aplica, el resto debe pedirse en un rango más estrecho.
+MAX_SESSIONS_PER_REPORT = 1000
+
+# Whitelist para sanitizar nombres de archivo y evitar HTTP response splitting
+# en el header Content-Disposition.
+_FILENAME_SAFE_RE = re.compile(r'[^A-Za-z0-9._-]+')
+
+
+def _esc(value) -> str:
+    """Escapa entidades XML/HTML antes de pasar texto a ReportLab Paragraph.
+
+    Sin esto, un diagnosis con `<b>` o `&` corrompería el PDF o abriría
+    superficie de inyección de marcado controlada por el usuario.
+    """
+    if value is None:
+        return ''
+    return xml_escape(str(value))
+
+
+def _safe_filename(base: str, extension: str) -> str:
+    """Filtra caracteres no seguros para Content-Disposition."""
+    cleaned = _FILENAME_SAFE_RE.sub('_', base)
+    return f'{cleaned}.{extension}'
+
+
+def _local_naive(value):
+    """Convierte un datetime aware a la TZ local y le quita el tzinfo.
+
+    Excel no maneja tzinfo; sin conversión previa, las celdas formateadas
+    como local mostrarían la hora UTC.
+    """
+    if value is None:
+        return ''
+    if not isinstance(value, dt.datetime):
+        return value
+    if timezone.is_aware(value):
+        return timezone.localtime(value).replace(tzinfo=None)
+    return value.replace(tzinfo=None)
+
 
 def _day_start_end(
     date_from: dt.date,
     date_to: dt.date,
 ) -> tuple[dt.datetime, dt.datetime]:
-    start = timezone.make_aware(dt.datetime.combine(date_from, dt.time.min))
-    end = timezone.make_aware(dt.datetime.combine(date_to, dt.time.max))
+    tz = timezone.get_current_timezone()
+    start = timezone.make_aware(dt.datetime.combine(date_from, dt.time.min), tz)
+    end = timezone.make_aware(dt.datetime.combine(date_to, dt.time.max), tz)
     return start, end
 
 
@@ -43,9 +86,17 @@ def fetch_sessions_for_report(
     patient_id: int,
     date_from: dt.date,
     date_to: dt.date,
-) -> list[Session]:
+) -> tuple[list[Session], bool]:
+    """
+    Devuelve ``(sesiones, truncated)``. ``truncated`` indica que el rango
+    superó ``MAX_SESSIONS_PER_REPORT`` y se aplicó un corte defensivo.
+
+    Se piden ``MAX+1`` filas para detectar el truncamiento sin un COUNT(*)
+    extra. ``prefetch_related('exercises')`` evita N+1 cuando el PDF
+    enumera ejercicios por sesión.
+    """
     start, end = _day_start_end(date_from, date_to)
-    return list(
+    qs = (
         Session.objects.filter(
             therapist=therapist,
             patient_id=patient_id,
@@ -53,8 +104,14 @@ def fetch_sessions_for_report(
             occurred_at__lte=end,
         )
         .select_related('patient')
+        .prefetch_related('exercises')
         .order_by('occurred_at')
     )
+    rows = list(qs[: MAX_SESSIONS_PER_REPORT + 1])
+    truncated = len(rows) > MAX_SESSIONS_PER_REPORT
+    if truncated:
+        rows = rows[:MAX_SESSIONS_PER_REPORT]
+    return rows, truncated
 
 
 def _safe_cell(value) -> str:
@@ -72,6 +129,7 @@ def build_xlsx_bytes(
     date_from: dt.date,
     date_to: dt.date,
     diagnosis: str,
+    truncated: bool = False,
 ) -> bytes:
     from openpyxl import Workbook
 
@@ -86,6 +144,8 @@ def build_xlsx_bytes(
     )
     ws.append(['Diagnóstico (vínculo)', diagnosis])
     ws.append(['Periodo', f'{date_from.isoformat()} — {date_to.isoformat()}'])
+    if truncated:
+        ws.append(['Resultado truncado', f'Sí (máx. {MAX_SESSIONS_PER_REPORT} sesiones)'])
     ws.append([])
     ws.append(
         [
@@ -101,7 +161,7 @@ def build_xlsx_bytes(
     for s in sessions:
         ws.append(
             [
-                s.occurred_at.isoformat(),
+                _local_naive(s.occurred_at),
                 s.program_label or '',
                 s.duration_min if s.duration_min is not None else '',
                 float(s.score) if s.score is not None else '',
@@ -123,6 +183,7 @@ def build_pdf_bytes(
     date_to: dt.date,
     diagnosis: str,
     therapist_username: str,
+    truncated: bool = False,
 ) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -136,15 +197,28 @@ def build_pdf_bytes(
 
     story.append(Paragraph('Informe clínico — RehabWeb', styles['Title']))
     story.append(Spacer(1, 12))
-    story.append(Paragraph(f'<b>Terapeuta:</b> {therapist_username}', styles['Normal']))
-    story.append(Paragraph(f'<b>Paciente:</b> {patient_name}', styles['Normal']))
-    story.append(Paragraph(f'<b>Diagnóstico (vínculo):</b> {diagnosis or "—"}', styles['Normal']))
+    story.append(Paragraph(f'<b>Terapeuta:</b> {_esc(therapist_username)}', styles['Normal']))
+    story.append(Paragraph(f'<b>Paciente:</b> {_esc(patient_name)}', styles['Normal']))
+    story.append(
+        Paragraph(
+            f'<b>Diagnóstico (vínculo):</b> {_esc(diagnosis) or "—"}',
+            styles['Normal'],
+        )
+    )
     story.append(
         Paragraph(
             f'<b>Periodo:</b> {date_from.isoformat()} — {date_to.isoformat()}',
             styles['Normal'],
         )
     )
+    if truncated:
+        story.append(
+            Paragraph(
+                f'<i>Nota: el rango supera el máximo permitido; se muestran '
+                f'las primeras {MAX_SESSIONS_PER_REPORT} sesiones.</i>',
+                styles['Normal'],
+            )
+        )
     story.append(Spacer(1, 18))
 
     table_data = [
@@ -202,13 +276,16 @@ def render_clinical_export(
     La vista debe comprobar antes que ``link`` pertenece a ``therapist`` y está activo.
     """
     patient_id = link.patient_id
-    sessions = fetch_sessions_for_report(therapist, patient_id, date_from, date_to)
+    sessions, truncated = fetch_sessions_for_report(
+        therapist, patient_id, date_from, date_to
+    )
     patient_name = link.patient.full_name
     diagnosis = link.primary_diagnosis or ''
 
-    slug_from = date_from.isoformat()
-    slug_to = date_to.isoformat()
-    base = f'informe_clinico_p{patient_id}_{slug_from}_{slug_to}'
+    base = (
+        f'informe_clinico_p{int(patient_id)}_'
+        f'{date_from.isoformat()}_{date_to.isoformat()}'
+    )
 
     if file_format == 'xlsx':
         content = build_xlsx_bytes(
@@ -217,8 +294,9 @@ def render_clinical_export(
             date_from=date_from,
             date_to=date_to,
             diagnosis=diagnosis,
+            truncated=truncated,
         )
-        filename = f'{base}.xlsx'
+        filename = _safe_filename(base, 'xlsx')
         mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     else:
         content = build_pdf_bytes(
@@ -228,15 +306,17 @@ def render_clinical_export(
             date_to=date_to,
             diagnosis=diagnosis,
             therapist_username=therapist.user.get_username(),
+            truncated=truncated,
         )
-        filename = f'{base}.pdf'
+        filename = _safe_filename(base, 'pdf')
         mime = 'application/pdf'
 
     logger.info(
-        'clinical_export user=%s patient_id=%s format=%s sessions=%s',
+        'clinical_export user=%s patient_id=%s format=%s sessions=%s truncated=%s',
         therapist.user_id,
         patient_id,
         file_format,
         len(sessions),
+        truncated,
     )
     return content, filename, mime
