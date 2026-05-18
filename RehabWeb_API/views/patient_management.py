@@ -40,7 +40,7 @@ class TherapistPatientListAPIView(generics.ListAPIView):
     permission_classes = (IsAuthenticated,)
     filter_backends = (DjangoFilterBackend, OrderingFilter)
     filterset_class = TherapistPatientListFilter
-    ordering_fields = ('id', 'patient__full_name')
+    ordering_fields = ('id', 'patient__full_name', 'clinical_status')
     ordering = ('-id',)
     pagination_class = APIPageNumberPagination
 
