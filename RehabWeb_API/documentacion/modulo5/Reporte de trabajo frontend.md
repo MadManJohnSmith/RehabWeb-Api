@@ -10,7 +10,7 @@ Documento vivo: resume **qué se entregó en front** por historia de usuario (HU
 
 ### Resumen (qué hace el usuario)
 
-En el **tablero de control** (`/app`, ruta `dashboard`) el terapeuta ve un resumen con datos de demostración: alertas de inactividad, indicadores en anillo, **ROM semanal en barras**, una **gráfica de evolución** con línea de meta y línea observada, paneles laterales y tabla de sesiones recientes. Al pasar el ratón por los puntos de la gráfica aparece un texto con **valores numéricos** y el criterio de tendencia. Los puntos se pintan en **verde / coral / gris** según si respecto al **periodo anterior** hubo mejora, regresión o sin cambio (primer punto en gris).
+En el **tablero de control** (`/app`, ruta `dashboard`) el terapeuta ve un resumen con datos de demostración: alertas de inactividad, indicadores en anillo, **ROM semanal en barras**, una **gráfica de evolución** con línea de meta y línea observada, paneles laterales y tabla de sesiones recientes. El panel lateral **Últimos resúmenes de reportes** actúa como un atajo a la exportación (HU-02), donde al hacer clic en un ítem el sistema navega a la pantalla de reportes prellenando el paciente y un rango de fechas sugerido. Al pasar el ratón por los puntos de la gráfica aparece un texto con **valores numéricos** y el criterio de tendencia. Los puntos se pintan en **verde / coral / gris** según si respecto al **periodo anterior** hubo mejora, regresión o sin cambio (primer punto en gris).
 
 ### Detalle técnico
 
