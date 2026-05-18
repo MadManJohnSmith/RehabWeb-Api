@@ -94,6 +94,11 @@ class TherapistPatient(models.Model):
     def __str__(self) -> str:
         return f'{self.therapist} → {self.patient}'
 
+    def save(self, *args, **kwargs):
+        if self.primary_diagnosis:
+            self.primary_diagnosis = self.primary_diagnosis.strip()
+        super().save(*args, **kwargs)
+
 
 class Session(models.Model):
     """Sesión de rehabilitación (HU-03, HU-05, dashboard HU-01)."""
