@@ -22,15 +22,19 @@ logger = logging.getLogger(__name__)
 
 
 def _severity_for(days_since: int | None, has_never_session: bool) -> str:
-    if has_never_session:
-        return 'no_sessions'
-    if days_since is None:
-        return 'unknown'
+    """
+    Devuelve siempre un valor del enum ``InactivityAlert.Severity`` para evitar
+    ValidationError al guardar. ``days_since is None`` con sesiones registradas
+    no debería ocurrir en condiciones normales (defensa), pero si pasa se trata
+    como ``no_sessions`` en lugar de un valor desconocido.
+    """
+    if has_never_session or days_since is None:
+        return InactivityAlert.Severity.NO_SESSIONS
     if days_since >= 14:
-        return 'high'
+        return InactivityAlert.Severity.HIGH
     if days_since >= 7:
-        return 'medium'
-    return 'low'
+        return InactivityAlert.Severity.MEDIUM
+    return InactivityAlert.Severity.LOW
 
 
 def sync_inactivity_alerts_for_therapist(therapist: Therapist) -> int:

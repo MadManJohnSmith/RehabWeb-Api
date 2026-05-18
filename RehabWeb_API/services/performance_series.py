@@ -163,6 +163,83 @@ def resolve_patient_for_therapist(
     return 'ok', payload
 
 
+def resolve_patients_batch(
+    therapist,
+    patient_ids: list[int],
+) -> tuple[dict[int, str], dict[int, dict[str, Any]]]:
+    """
+    Versión batch de :func:`resolve_patient_for_therapist` para HU-04 compare.
+
+    Resuelve N pacientes en O(1) queries por grupo (no por paciente):
+    1× SELECT pacientes existentes, 1× SELECT vínculos activos del terapeuta,
+    1× SELECT MetricPoint para todos los pacientes autorizados.
+
+    Devuelve ``(status_by_id, payload_by_id)`` donde ``status`` ∈
+    ``{'not_found', 'forbidden', 'ok'}``. Sólo los ``ok`` aparecen en
+    ``payload_by_id``.
+    """
+    from RehabWeb_API.models import TherapistPatient
+
+    ids = list(dict.fromkeys(patient_ids))
+    if not ids:
+        return {}, {}
+
+    existing_ids = set(
+        Patient.objects.filter(pk__in=ids).values_list('pk', flat=True)
+    )
+    authorized_links = {
+        link.patient_id: link
+        for link in TherapistPatient.objects
+        .filter(
+            therapist=therapist,
+            patient_id__in=existing_ids,
+            deleted_at__isnull=True,
+        )
+        .select_related('patient')
+    }
+    authorized_ids = set(authorized_links.keys())
+
+    points_by_patient: dict[int, list[MetricPoint]] = {}
+    if authorized_ids:
+        for mp in (
+            MetricPoint.objects.filter(
+                patient_id__in=authorized_ids,
+                metric_type=MetricPoint.MetricType.TEMPORAL,
+            )
+            .only(
+                'patient_id',
+                'sort_order',
+                'period_label',
+                'meta_value',
+                'observed_value',
+            )
+            .order_by('patient_id', 'sort_order', 'period_label')
+        ):
+            points_by_patient.setdefault(mp.patient_id, []).append(mp)
+
+    status_by_id: dict[int, str] = {}
+    payload_by_id: dict[int, dict[str, Any]] = {}
+    for pid in ids:
+        if pid not in existing_ids:
+            status_by_id[pid] = 'not_found'
+            continue
+        if pid not in authorized_ids:
+            status_by_id[pid] = 'forbidden'
+            continue
+        link = authorized_links[pid]
+        points = points_by_patient.get(pid, [])[:SERIES_ROW_CAP]
+        temporal_series = metric_points_to_series_rows(points)
+        summary = compute_series_summary(temporal_series)
+        status_by_id[pid] = 'ok'
+        payload_by_id[pid] = {
+            'patientId': pid,
+            'fullName': link.patient.full_name,
+            'temporalSeries': temporal_series,
+            'summary': summary,
+        }
+    return status_by_id, payload_by_id
+
+
 def compute_group_bounds(patients_payload: list[dict[str, Any]]) -> dict[str, float]:
     """Límites sugeridos para escala común en gráfico grupal."""
     all_obs: list[float] = []

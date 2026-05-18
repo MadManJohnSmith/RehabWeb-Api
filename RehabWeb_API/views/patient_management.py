@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from django.db import transaction
+import logging
+
+from django.db import IntegrityError, transaction
 from django.http import Http404
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
@@ -24,6 +26,8 @@ from RehabWeb_API.services.patient_links import therapist_patient_base_queryset
 from RehabWeb_API.services.therapist_access import get_therapist_for_user
 from RehabWeb_API.pagination import APIPageNumberPagination
 
+logger = logging.getLogger(__name__)
+
 
 class TherapistPatientListAPIView(generics.ListAPIView):
     """
@@ -44,7 +48,15 @@ class TherapistPatientListAPIView(generics.ListAPIView):
         therapist = get_therapist_for_user(self.request.user)
         if therapist is None:
             return TherapistPatient.objects.none()
-        return therapist_patient_base_queryset(therapist)
+        qs = therapist_patient_base_queryset(therapist)
+        # Por defecto ocultamos los vínculos soft-deleted; el cliente puede
+        # pedirlos con ``?includeDeleted=true``. El método del FilterSet
+        # solo se ejecuta si el parámetro está presente, por lo que la
+        # exclusión por defecto debe hacerse aquí.
+        raw = self.request.query_params.get('includeDeleted', '')
+        if raw.strip().lower() not in ('true', '1', 'yes', 'on'):
+            qs = qs.filter(deleted_at__isnull=True)
+        return qs
 
     def list(self, request, *args, **kwargs):
         if get_therapist_for_user(request.user) is None:
@@ -94,38 +106,96 @@ class PatientLinkAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        existing_patient = None
-        if assoc:
-            existing_patient = Patient.objects.filter(external_id=assoc).first()
-            if existing_patient:
-                conflict = TherapistPatient.objects.filter(
-                    patient=existing_patient,
-                    deleted_at__isnull=True,
-                ).exclude(therapist=therapist)
-                if conflict.exists():
-                    return Response(
-                        {
-                            'detail': 'Este paciente ya está vinculado a otro terapeuta.',
-                        },
-                        status=status.HTTP_409_CONFLICT,
-                    )
+        try:
+            link, http_status = self._link_atomic(
+                therapist=therapist,
+                assoc=assoc,
+                full_name=full_name,
+                diag=diag,
+                cstat=cstat,
+            )
+        except _PatientConflictError:
+            return Response(
+                {'detail': 'Este paciente ya está vinculado a otro terapeuta.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        except IntegrityError:
+            # Carrera contra otra request: ya hay un vínculo activo del
+            # mismo terapeuta con este paciente. Devolvemos el actual.
+            logger.warning(
+                'PatientLink integrity race user=%s assoc=%s',
+                getattr(request.user, 'pk', None),
+                assoc,
+            )
+            existing_patient = (
+                Patient.objects.filter(external_id=assoc).first()
+                if assoc else None
+            )
+            if existing_patient is None:
+                return Response(
+                    {'detail': 'No fue posible vincular al paciente.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            existing_link = TherapistPatient.objects.filter(
+                therapist=therapist,
+                patient=existing_patient,
+                deleted_at__isnull=True,
+            ).first()
+            if existing_link is None:
+                return Response(
+                    {'detail': 'No fue posible vincular al paciente.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            link = existing_link
+            http_status = status.HTTP_200_OK
 
-        http_status = status.HTTP_201_CREATED
+        refreshed = therapist_patient_base_queryset(therapist).filter(pk=link.pk).first()
+        return Response(
+            TherapistPatientRowSerializer(refreshed).data,
+            status=http_status,
+        )
 
+    @staticmethod
+    def _link_atomic(*, therapist, assoc, full_name, diag, cstat):
+        """
+        Toda la lógica de resolver/crear paciente y vínculo dentro de un
+        bloque ``transaction.atomic`` con ``select_for_update`` sobre el
+        paciente para cerrar la carrera de chequeo-y-creación entre
+        terapeutas.
+
+        Devuelve ``(link, http_status)``.
+        Lanza ``_PatientConflictError`` si el paciente ya está vinculado
+        activo a otro terapeuta.
+        """
         with transaction.atomic():
+            patient = None
             if assoc:
-                if existing_patient:
-                    patient = existing_patient
-                    if patient.full_name != full_name:
-                        patient.full_name = full_name
-                        patient.save(update_fields=['full_name'])
-                else:
-                    patient = Patient.objects.create(
-                        external_id=assoc,
-                        full_name=full_name,
-                    )
+                patient = (
+                    Patient.objects
+                    .select_for_update()
+                    .filter(external_id=assoc)
+                    .first()
+                )
+
+            if patient is None:
+                patient = Patient.objects.create(
+                    external_id=assoc,
+                    full_name=full_name,
+                )
             else:
-                patient = Patient.objects.create(external_id='', full_name=full_name)
+                # Ya tenemos el lock; verificar conflicto con otro terapeuta
+                # DESPUÉS del select_for_update evita el TOCTOU clásico.
+                conflict = (
+                    TherapistPatient.objects
+                    .filter(patient=patient, deleted_at__isnull=True)
+                    .exclude(therapist=therapist)
+                    .exists()
+                )
+                if conflict:
+                    raise _PatientConflictError()
+                if patient.full_name != full_name:
+                    patient.full_name = full_name
+                    patient.save(update_fields=['full_name'])
 
             active_self = TherapistPatient.objects.filter(
                 therapist=therapist,
@@ -138,43 +208,41 @@ class PatientLinkAPIView(APIView):
                 active_self.save(
                     update_fields=('primary_diagnosis', 'clinical_status'),
                 )
-                link = active_self
-                http_status = status.HTTP_200_OK
-            else:
-                soft = (
-                    TherapistPatient.objects.filter(
-                        therapist=therapist,
-                        patient=patient,
-                        deleted_at__isnull=False,
-                    )
-                    .order_by('-id')
-                    .first()
-                )
-                if soft:
-                    soft.deleted_at = None
-                    soft.primary_diagnosis = diag
-                    soft.clinical_status = cstat
-                    soft.save(
-                        update_fields=(
-                            'deleted_at',
-                            'primary_diagnosis',
-                            'clinical_status',
-                        ),
-                    )
-                    link = soft
-                else:
-                    link = TherapistPatient.objects.create(
-                        therapist=therapist,
-                        patient=patient,
-                        primary_diagnosis=diag,
-                        clinical_status=cstat,
-                    )
+                return active_self, status.HTTP_200_OK
 
-        link = therapist_patient_base_queryset(therapist).filter(pk=link.pk).first()
-        return Response(
-            TherapistPatientRowSerializer(link).data,
-            status=http_status,
-        )
+            soft = (
+                TherapistPatient.objects.filter(
+                    therapist=therapist,
+                    patient=patient,
+                    deleted_at__isnull=False,
+                )
+                .order_by('-id')
+                .first()
+            )
+            if soft:
+                soft.deleted_at = None
+                soft.primary_diagnosis = diag
+                soft.clinical_status = cstat
+                soft.save(
+                    update_fields=(
+                        'deleted_at',
+                        'primary_diagnosis',
+                        'clinical_status',
+                    ),
+                )
+                return soft, status.HTTP_200_OK
+
+            link = TherapistPatient.objects.create(
+                therapist=therapist,
+                patient=patient,
+                primary_diagnosis=diag,
+                clinical_status=cstat,
+            )
+            return link, status.HTTP_201_CREATED
+
+
+class _PatientConflictError(Exception):
+    """Señaliza conflicto de vínculo activo con otro terapeuta."""
 
 
 class TherapistPatientPatchAPIView(APIView):
