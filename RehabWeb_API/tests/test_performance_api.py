@@ -48,15 +48,15 @@ class PerformanceCompareAPITests(APITestCase):
             401,
         )
 
-    @patch('RehabWeb_API.views.performance.resolve_patient_for_therapist')
+    @patch('RehabWeb_API.views.performance.resolve_patients_batch')
     @patch('RehabWeb_API.views.performance.get_therapist_for_user')
-    def test_compare_ok(self, mock_th, mock_res):
+    def test_compare_ok(self, mock_th, mock_batch):
         mock_th.return_value = object()
 
-        def _res(_t, pid):
-            return (
-                'ok',
-                {
+        def _batch(_t, ids):
+            status_by_id = {pid: 'ok' for pid in ids}
+            payload_by_id = {
+                pid: {
                     'patientId': pid,
                     'fullName': f'P{pid}',
                     'temporalSeries': [
@@ -69,10 +69,12 @@ class PerformanceCompareAPITests(APITestCase):
                         }
                     ],
                     'summary': {},
-                },
-            )
+                }
+                for pid in ids
+            }
+            return status_by_id, payload_by_id
 
-        mock_res.side_effect = _res
+        mock_batch.side_effect = _batch
         user = User.objects.create_user('p4c', 'p4c@e.com', 'pw12345678')
         self.client.credentials(HTTP_AUTHORIZATION=f'Token {Token.objects.create(user=user).key}')
         url = reverse('performance-compare')

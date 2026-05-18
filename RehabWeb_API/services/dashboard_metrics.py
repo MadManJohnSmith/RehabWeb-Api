@@ -11,7 +11,6 @@ from decimal import Decimal
 from typing import Any
 
 from django.contrib.auth.models import AbstractUser
-from django.db.models import Max
 from django.utils import timezone
 
 from RehabWeb_API.models import MetricPoint, Session, Therapist, TherapistPatient
@@ -221,7 +220,12 @@ def _compute_summary_rings(
     therapist: Therapist,
     recent_sessions: list[Session],
 ) -> list[dict[str, Any]]:
-    """KPIs simples para anillos / tarjetas del dashboard (extensible)."""
+    """KPIs simples para anillos / tarjetas del dashboard (extensible).
+
+    ``recent_sessions`` ya viene acotado por ``RECENT_SESSIONS_LIMIT``; la
+    métrica de adherencia es por tanto **una media de la ventana reciente**,
+    no histórica — se refleja en el label para evitar lecturas erróneas.
+    """
     rings: list[dict[str, Any]] = []
 
     active_links = TherapistPatient.objects.filter(
@@ -249,10 +253,29 @@ def _compute_summary_rings(
         rings.append(
             {
                 'key': 'avgAdherenceRecent',
-                'label': 'Adherencia reciente (media)',
+                'label': f'Adherencia media (últimas {len(adher_values)})',
                 'value': round(avg, 1),
                 'maxValue': 100.0,
                 'unit': 'percent',
+                'sampleSize': len(adher_values),
+            }
+        )
+
+    score_values = [
+        float(s.score)
+        for s in recent_sessions
+        if s.score is not None
+    ]
+    if score_values:
+        avg_score = sum(score_values) / len(score_values)
+        rings.append(
+            {
+                'key': 'avgScoreRecent',
+                'label': f'Score medio (últimas {len(score_values)})',
+                'value': round(avg_score, 2),
+                'maxValue': 10.0,
+                'unit': 'score',
+                'sampleSize': len(score_values),
             }
         )
 
