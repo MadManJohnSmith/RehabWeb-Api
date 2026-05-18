@@ -34,14 +34,22 @@ class SessionViewSet(viewsets.ReadOnlyModelViewSet):
             return SessionDetailSerializer
         return SessionListSerializer
 
+    def _get_therapist(self):
+        """Resuelve el Therapist UNA vez por request y lo cachea en self."""
+        cached = getattr(self, '_therapist_cache', None)
+        if cached is not None or hasattr(self, '_therapist_cache'):
+            return cached
+        self._therapist_cache = get_therapist_for_user(self.request.user)
+        return self._therapist_cache
+
     def _require_therapist(self):
-        therapist = get_therapist_for_user(self.request.user)
+        therapist = self._get_therapist()
         if therapist is None:
             raise PermissionDenied('Se requiere perfil de terapeuta.')
         return therapist
 
     def get_queryset(self):
-        therapist = get_therapist_for_user(self.request.user)
+        therapist = self._get_therapist()
         if therapist is None:
             return Session.objects.none()
         patient_ids = TherapistPatient.objects.filter(

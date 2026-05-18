@@ -10,6 +10,7 @@ from RehabWeb_API.serializers import PerformanceCompareRequestSerializer
 from RehabWeb_API.services.performance_series import (
     compute_group_bounds,
     resolve_patient_for_therapist,
+    resolve_patients_batch,
 )
 from RehabWeb_API.services.therapist_access import get_therapist_for_user
 
@@ -54,21 +55,23 @@ class PerformanceCompareAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         ids = serializer.validated_data['patientIds']
 
-        patients_payload: list[dict] = []
+        # Resolución batch: 3 queries totales en lugar de ~3×N.
+        status_by_id, payload_by_id = resolve_patients_batch(therapist, ids)
+
         for pid in ids:
-            status, payload = resolve_patient_for_therapist(therapist, pid)
-            if status == 'not_found':
+            st = status_by_id.get(pid)
+            if st == 'not_found':
                 return Response(
                     {'detail': f'El paciente {pid} no existe.'},
                     status=400,
                 )
-            if status == 'forbidden':
+            if st == 'forbidden':
                 return Response(
                     {'detail': f'No tienes acceso al paciente {pid}.'},
                     status=403,
                 )
-            patients_payload.append(payload)
 
+        patients_payload = [payload_by_id[pid] for pid in ids]
         group_bounds = compute_group_bounds(patients_payload)
         return Response(
             {

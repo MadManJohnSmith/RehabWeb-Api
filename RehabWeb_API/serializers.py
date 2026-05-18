@@ -123,7 +123,11 @@ class TherapistPatientRowSerializer(serializers.ModelSerializer):
     linkId = serializers.IntegerField(source='id', read_only=True)
     associationId = serializers.CharField(source='patient.external_id', read_only=True)
     fullName = serializers.CharField(source='patient.full_name', read_only=True)
-    primaryDiagnosis = serializers.CharField(read_only=True)
+    # source explícito: el campo modelo es `primary_diagnosis`; sin él DRF
+    # busca instance.primaryDiagnosis (no existe) y omite la clave del JSON.
+    primaryDiagnosis = serializers.CharField(
+        source='primary_diagnosis', read_only=True, allow_blank=True,
+    )
     clinicalStatus = serializers.CharField(source='clinical_status', read_only=True)
     lastSessionAt = serializers.DateTimeField(
         source='last_session_at',

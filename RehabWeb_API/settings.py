@@ -20,9 +20,10 @@ if load_dotenv:
     load_dotenv(BASE_DIR / '.env')
 
 # SECURITY WARNING: keep the secret key used in production secret!
+# En dev sirve el default; en prod definir DJANGO_SECRET_KEY como env var.
 SECRET_KEY = os.environ.get(
     'DJANGO_SECRET_KEY',
-    'django-insecure-change-this-in-production-rehabweb-api-secret-key',
+    'django-insecure-dev-only-key-do-not-use-in-production',
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
@@ -99,6 +100,9 @@ DATABASES = {
         'PORT': os.environ.get('MYSQL_PORT', '3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',
+            # MariaDB W002: strict mode escala warnings de integridad
+            # (truncamiento, divisiones por cero) a errores reales.
+            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
         },
     }
 }
@@ -202,7 +206,32 @@ REST_FRAMEWORK = {
         'django_filters.rest_framework.DjangoFilterBackend',
     ),
     'DEFAULT_PAGINATION_CLASS': 'RehabWeb_API.pagination.APIPageNumberPagination',
+    # Solo se aplica ScopedRateThrottle: las vistas que necesitan límite
+    # declaran su throttle_scope. Esto evita romper tests que disparan
+    # muchas requests sin afectar la protección puntual de exports.
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.ScopedRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        # HU-02: la generación de PDF/Excel es costosa en CPU/IO.
+        'reports_export': '30/min',
+    },
 }
+
+
+# Security hardening — solo cuando DEBUG=False (no rompe dev local).
+
+if not DEBUG:
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
+    X_FRAME_OPTIONS = 'DENY'
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = int(os.environ.get('DJANGO_HSTS_SECONDS', '31536000'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 
 # Logging — Consola con nivel INFO

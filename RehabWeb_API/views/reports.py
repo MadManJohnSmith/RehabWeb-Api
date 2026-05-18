@@ -1,9 +1,9 @@
 """Vistas API — Exportación de informes clínicos (HU-02)."""
 
 import logging
-from io import BytesIO
 
-from django.http import FileResponse
+from django.core.exceptions import ObjectDoesNotExist
+from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
@@ -31,6 +31,7 @@ class ReportExportAPIView(APIView):
     """
 
     permission_classes = (IsAuthenticated,)
+    throttle_scope = 'reports_export'
 
     def post(self, request, *args, **kwargs):
         serializer = ClinicalExportRequestSerializer(data=request.data)
@@ -53,20 +54,29 @@ class ReportExportAPIView(APIView):
                 data['dateTo'],
                 data['format'],
             )
-        except Exception:
+        except ObjectDoesNotExist:
+            return Response(
+                {'detail': 'Paciente no encontrado.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except MemoryError:
+            logger.exception(
+                'clinical_export OOM user=%s patient=%s',
+                getattr(request.user, 'pk', None),
+                data['patientId'],
+            )
+            return Response(
+                {'detail': 'El informe excede la capacidad de procesamiento.'},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+        except Exception:  # noqa: BLE001 — barrera de último recurso con log
             logger.exception('Fallo al generar informe clínico')
             return Response(
                 {'detail': 'No se pudo generar el archivo. Revisa los datos o inténtalo más tarde.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        buffer = BytesIO(content)
-        buffer.seek(0)
-        response = FileResponse(
-            buffer,
-            as_attachment=True,
-            filename=filename,
-            content_type=mime,
-        )
+        response = HttpResponse(content, content_type=mime)
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        response['Content-Length'] = str(len(content))
         return response
