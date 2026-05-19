@@ -80,6 +80,7 @@ def get_inactive_patients_for_therapist(
                     'daysSinceLastSession': days_since,
                     'lastSessionAt': last_at.isoformat() if last_at else None,
                     'urgencyLevel': urgency,
+                    'lastSessionDate': last_at.strftime('%d/%m/%Y') if last_at else None,
                 }
             )
     rows.sort(
