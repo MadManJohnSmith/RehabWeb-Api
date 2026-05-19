@@ -68,12 +68,18 @@ def get_inactive_patients_for_therapist(
             days_since = (now.date() - last_at.date()).days
 
         if inactive:
+            urgency = (
+                'critical' if days_since is None or days_since > 30
+                else 'high' if days_since > 7
+                else 'medium'
+            )
             rows.append(
                 {
                     'patientId': pid,
                     'fullName': link.patient.full_name,
                     'daysSinceLastSession': days_since,
                     'lastSessionAt': last_at.isoformat() if last_at else None,
+                    'urgencyLevel': urgency,
                 }
             )
     rows.sort(
