@@ -29,16 +29,21 @@ class InactivityAlertListAPIView(APIView):
             raise PermissionDenied('Se requiere perfil de terapeuta.')
 
         alerts = get_inactive_patients_for_therapist(therapist)
+
         patient_id = request.query_params.get('patientId')
         if patient_id is not None:
             try:
                 pid = int(patient_id)
             except ValueError:
-                return Response(
-                    {'detail': 'patientId debe ser un entero.'},
-                    status=400,
-                )
+                return Response({'detail': 'patientId debe ser un entero.'}, status=400)
             alerts = [a for a in alerts if a['patientId'] == pid]
+
+        urgency = request.query_params.get('urgency')
+        if urgency is not None:
+            valid = {'critical', 'high', 'medium'}
+            if urgency not in valid:
+                return Response({'detail': f'urgency debe ser uno de: {", ".join(valid)}.'}, status=400)
+            alerts = [a for a in alerts if a['urgencyLevel'] == urgency]
 
         return Response(
             {
