@@ -6,6 +6,11 @@ Generated for the RehabWeb physiotherapy webapp.
 
 from pathlib import Path
 
+#Chat app
+import os
+from pathlib import Path
+#Chat app
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -34,6 +39,8 @@ INSTALLED_APPS = [
     'django_filters',
     # Local apps
     'RehabWeb_API',
+    #Chat app
+    'chat',
 ]
 
 MIDDLEWARE = [
@@ -74,7 +81,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'rehab_db',
         'USER': 'root',
-        'PASSWORD': '',
+        'PASSWORD': 'Moises123728?',
         'HOST': '127.0.0.1',
         'PORT': '3306',
     }
@@ -190,3 +197,10 @@ LOGGING = {
         },
     },
 }
+
+#Chat app
+BASE_DIR = Path(__file__).resolve().parent.parent
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5242880 # 5 MB
+#chat app
